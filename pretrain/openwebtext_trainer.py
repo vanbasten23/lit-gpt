@@ -22,7 +22,7 @@ from lit_gpt.speed_monitor import SpeedMonitorCallback, estimate_flops, measure_
 from lit_gpt.utils import chunked_cross_entropy, get_default_supported_precision, step_csv_logger
 
 model_name = "pythia-70m"
-name = "openwebtext"
+name = "redrock-fsdp"
 out_dir = Path("out") / name
 data_dir = Path("data") / name
 save_interval = 1000

@@ -106,6 +106,17 @@ configs = [
     dict(org="stabilityai", name="stablelm-tuned-alpha-7b", n_head=48, n_embd=6144, padding_multiple=256),
 ]
 
+#######################
+# RedRock
+######################
+
+redrock = [
+    dict(name="redrock-175b", block_size=2048, n_layer=5, n_embd=12288, n_head=96, padding_multiple=128),
+    dict(name="redrock-1t", block_size=2048, n_layer=5, n_embd=25600, n_head=160, padding_multiple=128)
+]
+
+configs.extend(redrock)
+
 ####################
 # EleutherAI Pythia
 ####################
