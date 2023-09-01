@@ -19,6 +19,7 @@ import torch.profiler as tprofiler
 from torch.utils.data import DataLoader, IterableDataset
 import nvtx
 
+import logging
 
 # support running without installing as a package
 wd = Path(__file__).parent.parent.resolve()
@@ -193,6 +194,7 @@ def main(
     pt_profiler_warmup: int = 2,
     pt_profiler_active: int = 2,
     pt_profiler_repeat: int = 5,
+    debug: bool = False,
 ) -> None:
   if use_pt_profiler:
     cm = nullcontext()
@@ -261,6 +263,9 @@ def main(
         val_check_interval=eval_interval,
         num_nodes=num_nodes,
     )
+
+    if debug:
+      logging.getLogger('lightning.pytorch.trainer.trainer').setLevel(logging.DEBUG)
 
     L.seed_everything(
         1337, workers=True
