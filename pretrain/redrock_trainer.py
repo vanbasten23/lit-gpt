@@ -43,13 +43,10 @@ log_interval = 1
 
 # Hyperparameters
 learning_rate = 6e-4
-max_iters = 600000  # num_epochs * (epoch_size // micro_batch_size) // devices
 weight_decay = 1e-1
 beta1 = 0.9
 beta2 = 0.95
 decay_lr = True
-warmup_iters = 2000
-lr_decay_iters = max_iters
 min_lr = 6e-5
 
 hparams = {
@@ -67,6 +64,8 @@ class LightningGPTModule(L.LightningModule):
       micro_batch_size,
       prof: Optional[tprofiler.profile],
       gradient_accumulation_steps: int,
+      max_iters: int,
+      warmup_iters: int,
   ) -> None:
     super().__init__()
     self.config = config
@@ -77,6 +76,8 @@ class LightningGPTModule(L.LightningModule):
     self.prof = prof
     self.gradient_accumulation_steps = gradient_accumulation_steps
     self.backward_nvtx_range = None
+    self.max_iters = max_iters
+    self.warmup_iters = warmup_iters
 
   def configure_model(self) -> None:
     self.module = GPT(self.config)
@@ -115,7 +116,7 @@ class LightningGPTModule(L.LightningModule):
     if not decay_lr:
       return
     # determine and set the learning rate for this iteration
-    lr = get_lr(self.trainer.fit_loop.total_batch_idx)
+    lr = get_lr(self.trainer.fit_loop.total_batch_idx, self.max_iters, self.warmup_iters)
     for optimizer in self.trainer.strategy.optimizers:
       for param_group in optimizer.param_groups:
         param_group["lr"] = lr
@@ -184,6 +185,8 @@ def main(
     tpu: bool = False,
     model_name: str = "redrock-175b",
     name: str = "redrock-fsdp",
+    max_iters: int = 60000,
+    warmup_iters: int = 2000,
     out_dir: str = None,
     data_dir: str = None,
     num_nodes: int = 1,
@@ -297,7 +300,12 @@ def main(
     else:
       prof = None
     model = LightningGPTModule(
-        config, micro_batch_size, prof, gradient_accumulation_steps
+        config,
+        micro_batch_size,
+        prof,
+        gradient_accumulation_steps,
+        max_iters,
+        warmup_iters
     )
     trainer.print(
         f"Time to instantiate model: {time.perf_counter() - t0:.02f} seconds."
@@ -342,7 +350,7 @@ class Dataset(IterableDataset):
 
 
 # learning rate decay scheduler (cosine with warmup)
-def get_lr(it):
+def get_lr(it, lr_decay_iters, warmup_iters):
   # 1) linear warmup for warmup_iters steps
   if it < warmup_iters:
     return learning_rate * it / warmup_iters
