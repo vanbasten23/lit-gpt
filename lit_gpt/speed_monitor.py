@@ -310,10 +310,14 @@ class SpeedMonitorCallback(Callback):
     def setup(self, trainer: Trainer, pl_module: LightningModule, stage: str) -> None:
         if self.speed_monitor is not None:
             return  # already setup
+        if trainer.strategy.root_device.type == "cuda":
+            device_name = torch.cuda.get_device_name(trainer.strategy.root_device).lower()
+            trainer.print("device_name", device_name)
         # TODO: this will not work properly if a precision plugin is passed to Trainer
         flops_available = get_flops_available(
             trainer.strategy.root_device, trainer._accelerator_connector._precision_flag
         )
+        trainer.print("flops_available: ", flops_available)
         self.speed_monitor = SpeedMonitorBase(flops_available, trainer.logger.log_metrics, **self.speed_monitor_kwargs)
 
     @trainer_rank_zero_only

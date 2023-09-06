@@ -28,7 +28,8 @@ sys.path.append(str(wd))
 from lit_gpt import Config
 from lit_gpt.model import GPT, Block
 from lit_gpt.speed_monitor import SpeedMonitorCallback, estimate_flops, measure_flops
-from lit_gpt.utils import chunked_cross_entropy, get_default_supported_precision, step_csv_logger
+from lit_gpt.utils import chunked_cross_entropy, get_default_supported_precision, step_csv_logger, num_parameters
+
 
 mp.set_start_method("spawn", force=True)
 
@@ -96,6 +97,7 @@ class LightningGPTModule(L.LightningModule):
     trainer = self.trainer
     with torch.device("meta"):
       meta_model = GPT(self.module.config)
+      trainer.print('model size: ', num_parameters(meta_model))
       # "estimated" is not as precise as "measured". Estimated is optimistic but widely used in the wild.
       # When comparing MFU or FLOP numbers with other projects that use estimated FLOPs,
       # consider setting `self.measured_flops = estimated_flops` instead
