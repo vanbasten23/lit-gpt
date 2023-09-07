@@ -67,6 +67,7 @@ class LightningGPTModule(L.LightningModule):
       gradient_accumulation_steps: int,
       max_iters: int,
       warmup_iters: int,
+      trainer,
   ) -> None:
     super().__init__()
     self.config = config
@@ -79,10 +80,23 @@ class LightningGPTModule(L.LightningModule):
     self.backward_nvtx_range = None
     self.max_iters = max_iters
     self.warmup_iters = warmup_iters
+    self.trainer = trainer
 
   def configure_model(self) -> None:
+    import psutil
+    import time
+    print(self.trainer.global_rank, ' in configure_model', flush=True)
+    print('RAM Used (GB):', psutil.virtual_memory()[3]/1000000000, flush=True)
+    t = time.time()
     self.module = GPT(self.config)
+    print(f'{self.trainer.global_rank} time to init model: {(time.time()-t):.02f}s', flush=True)
+    t = time.time()
     self.module.apply(self.module._init_weights)
+    print(f'{self.trainer.global_rank} time to init weights: {(time.time()-t):.02f}s', flush=True)
+    print(self.trainer.global_rank, ' out configure_model', flush=True)
+    print('RAM Used (GB):', psutil.virtual_memory()[3]/1000000000, flush=True)
+    
+
 
   def configure_optimizers(self) -> torch.optim.Optimizer:
     return torch.optim.AdamW(
@@ -150,6 +164,9 @@ class LightningGPTModule(L.LightningModule):
       torch.cuda.cudart().cudaProfilerStop()
     if is_last_microbatch:
       self.print(f"HEARTBEAT: {global_batch_idx=}, {batch_idx=}")
+      self.print(
+          f"Max memory used: {torch.cuda.max_memory_allocated() / 1e9:.02f} GB"
+      )
       sys.stdout.flush()
       sys.stderr.flush()
 
@@ -307,7 +324,8 @@ def main(
         prof,
         gradient_accumulation_steps,
         max_iters,
-        warmup_iters
+        warmup_iters,
+        trainer,
     )
     trainer.print(
         f"Time to instantiate model: {time.perf_counter() - t0:.02f} seconds."
