@@ -1,5 +1,6 @@
 from contextlib import nullcontext
 import math
+import os
 from pathlib import Path
 import sys
 import time
@@ -19,6 +20,7 @@ import torch.profiler as tprofiler
 from torch.utils.data import DataLoader, IterableDataset
 import nvtx
 
+import logging
 
 # support running without installing as a package
 wd = Path(__file__).parent.parent.resolve()
@@ -27,7 +29,8 @@ sys.path.append(str(wd))
 from lit_gpt import Config
 from lit_gpt.model import GPT, Block
 from lit_gpt.speed_monitor import SpeedMonitorCallback, estimate_flops, measure_flops
-from lit_gpt.utils import chunked_cross_entropy, get_default_supported_precision, step_csv_logger
+from lit_gpt.utils import chunked_cross_entropy, get_default_supported_precision, step_csv_logger, num_parameters
+
 
 mp.set_start_method("spawn", force=True)
 
@@ -35,20 +38,17 @@ import utilities.monitor_collectives
 
 utilities.monitor_collectives.shunt_torch_communication()
 
-save_interval = 10000
+save_interval = int(os.environ.get("SAVE_INTERVAL", 10000))
 eval_interval = 10000
 eval_iters = 100
 log_interval = 1
 
 # Hyperparameters
 learning_rate = 6e-4
-max_iters = 600000  # num_epochs * (epoch_size // micro_batch_size) // devices
 weight_decay = 1e-1
 beta1 = 0.9
 beta2 = 0.95
 decay_lr = True
-warmup_iters = 2000
-lr_decay_iters = max_iters
 min_lr = 6e-5
 
 hparams = {
@@ -66,6 +66,9 @@ class LightningGPTModule(L.LightningModule):
       micro_batch_size,
       prof: Optional[tprofiler.profile],
       gradient_accumulation_steps: int,
+      max_iters: int,
+      warmup_iters: int,
+      trainer,
   ) -> None:
     super().__init__()
     self.config = config
@@ -76,10 +79,25 @@ class LightningGPTModule(L.LightningModule):
     self.prof = prof
     self.gradient_accumulation_steps = gradient_accumulation_steps
     self.backward_nvtx_range = None
+    self.max_iters = max_iters
+    self.warmup_iters = warmup_iters
+    self.trainer = trainer
 
   def configure_model(self) -> None:
+    import psutil
+    import time
+    print(self.trainer.global_rank, ' in configure_model', flush=True)
+    print('RAM Used (GB):', psutil.virtual_memory()[3]/1000000000, flush=True)
+    t = time.time()
     self.module = GPT(self.config)
+    print(f'{self.trainer.global_rank} time to init model: {(time.time()-t):.02f}s', flush=True)
+    t = time.time()
     self.module.apply(self.module._init_weights)
+    print(f'{self.trainer.global_rank} time to init weights: {(time.time()-t):.02f}s', flush=True)
+    print(self.trainer.global_rank, ' out configure_model', flush=True)
+    print('RAM Used (GB):', psutil.virtual_memory()[3]/1000000000, flush=True)
+
+
 
   def configure_optimizers(self) -> torch.optim.Optimizer:
     return torch.optim.AdamW(
@@ -94,6 +112,7 @@ class LightningGPTModule(L.LightningModule):
     trainer = self.trainer
     with torch.device("meta"):
       meta_model = GPT(self.module.config)
+      trainer.print('model size: ', num_parameters(meta_model))
       # "estimated" is not as precise as "measured". Estimated is optimistic but widely used in the wild.
       # When comparing MFU or FLOP numbers with other projects that use estimated FLOPs,
       # consider setting `self.measured_flops = estimated_flops` instead
@@ -114,7 +133,7 @@ class LightningGPTModule(L.LightningModule):
     if not decay_lr:
       return
     # determine and set the learning rate for this iteration
-    lr = get_lr(self.trainer.fit_loop.total_batch_idx)
+    lr = get_lr(self.trainer.fit_loop.total_batch_idx, self.max_iters, self.warmup_iters)
     for optimizer in self.trainer.strategy.optimizers:
       for param_group in optimizer.param_groups:
         param_group["lr"] = lr
@@ -146,6 +165,9 @@ class LightningGPTModule(L.LightningModule):
       torch.cuda.cudart().cudaProfilerStop()
     if is_last_microbatch:
       self.print(f"HEARTBEAT: {global_batch_idx=}, {batch_idx=}")
+      self.print(
+          f"Max memory used: {torch.cuda.max_memory_allocated() / 1e9:.02f} GB"
+      )
       sys.stdout.flush()
       sys.stderr.flush()
 
@@ -183,6 +205,8 @@ def main(
     tpu: bool = False,
     model_name: str = "redrock-175b",
     name: str = "redrock-fsdp",
+    max_iters: int = 60000,
+    warmup_iters: int = 2000,
     out_dir: str = None,
     data_dir: str = None,
     num_nodes: int = 1,
@@ -193,6 +217,8 @@ def main(
     pt_profiler_warmup: int = 2,
     pt_profiler_active: int = 2,
     pt_profiler_repeat: int = 5,
+    debug: bool = False,
+    deterministic: bool = False,
 ) -> None:
   if use_pt_profiler:
     cm = nullcontext()
@@ -220,8 +246,7 @@ def main(
         strategy = FSDPStrategy(
             auto_wrap_policy={Block},
             activation_checkpointing_policy={Block},
-            # the argument is not available in the Trainer strategy, but it's the default anyways
-            # state_dict_type="full",
+            # state_dict_type="sharded",
             limit_all_gathers=True,
             cpu_offload=False,
             sharding_strategy=ShardingStrategy.FULL_SHARD,
@@ -244,8 +269,9 @@ def main(
     model_checkpoint = ModelCheckpoint(
         dirpath=checkpoint_out_dir,
         every_n_train_steps=save_interval,
-        save_last=True,
+        save_top_k=-1,
         verbose=True,
+        save_weights_only=True,
     )
     trainer = L.Trainer(
         devices=devices,
@@ -260,7 +286,11 @@ def main(
         log_every_n_steps=log_interval,
         val_check_interval=eval_interval,
         num_nodes=num_nodes,
+        deterministic=deterministic,
     )
+
+    if debug:
+      logging.getLogger('lightning.pytorch.trainer.trainer').setLevel(logging.DEBUG)
 
     L.seed_everything(
         1337, workers=True
@@ -292,7 +322,13 @@ def main(
     else:
       prof = None
     model = LightningGPTModule(
-        config, micro_batch_size, prof, gradient_accumulation_steps
+        config,
+        micro_batch_size,
+        prof,
+        gradient_accumulation_steps,
+        max_iters,
+        warmup_iters,
+        trainer,
     )
     trainer.print(
         f"Time to instantiate model: {time.perf_counter() - t0:.02f} seconds."
@@ -337,7 +373,7 @@ class Dataset(IterableDataset):
 
 
 # learning rate decay scheduler (cosine with warmup)
-def get_lr(it):
+def get_lr(it, lr_decay_iters, warmup_iters):
   # 1) linear warmup for warmup_iters steps
   if it < warmup_iters:
     return learning_rate * it / warmup_iters

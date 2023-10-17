@@ -111,8 +111,12 @@ configs = [
 ######################
 
 redrock = [
-    dict(name="redrock-175b", block_size=2048, n_layer=5, n_embd=12288, n_head=96, padding_multiple=128),
-    dict(name="redrock-1t", block_size=2048, n_layer=5, n_embd=25600, n_head=160, padding_multiple=128)
+    dict(name="redrock-100b", block_size=2048, n_layer=55, n_embd=12288, n_head=96, padding_multiple=128),
+    dict(name="redrock-175b-5-layers", block_size=2048, n_layer=5, n_embd=12288, n_head=96, padding_multiple=128),
+    dict(name="redrock-175b", block_size=2048, n_layer=96, n_embd=12288, n_head=96, padding_multiple=128),
+    dict(name="redrock-1t-5-layers", block_size=2048, n_layer=5, n_embd=25600, n_head=160, padding_multiple=128),
+    dict(name="redrock-1t", block_size=2048, n_layer=130, n_embd=25600, n_head=160, padding_multiple=128),
+    dict(name="redrock-1t", block_size=2048, n_layer=130, n_embd=25600, n_head=160, padding_multiple=128),
 ]
 
 configs.extend(redrock)
