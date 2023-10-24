@@ -1,5 +1,6 @@
 from contextlib import nullcontext
 import math
+import os
 from pathlib import Path
 import sys
 import time
@@ -37,7 +38,7 @@ import utilities.monitor_collectives
 
 utilities.monitor_collectives.shunt_torch_communication()
 
-save_interval = 10000
+save_interval = int(os.environ.get("SAVE_INTERVAL", 10000))
 eval_interval = 10000
 eval_iters = 100
 log_interval = 1
@@ -95,7 +96,7 @@ class LightningGPTModule(L.LightningModule):
     print(f'{self.trainer.global_rank} time to init weights: {(time.time()-t):.02f}s', flush=True)
     print(self.trainer.global_rank, ' out configure_model', flush=True)
     print('RAM Used (GB):', psutil.virtual_memory()[3]/1000000000, flush=True)
-    
+
 
 
   def configure_optimizers(self) -> torch.optim.Optimizer:
@@ -217,6 +218,7 @@ def main(
     pt_profiler_active: int = 2,
     pt_profiler_repeat: int = 5,
     debug: bool = False,
+    deterministic: bool = False,
 ) -> None:
   if use_pt_profiler:
     cm = nullcontext()
@@ -244,8 +246,7 @@ def main(
         strategy = FSDPStrategy(
             auto_wrap_policy={Block},
             activation_checkpointing_policy={Block},
-            # the argument is not available in the Trainer strategy, but it's the default anyways
-            # state_dict_type="full",
+            # state_dict_type="sharded",
             limit_all_gathers=True,
             cpu_offload=False,
             sharding_strategy=ShardingStrategy.FULL_SHARD,
@@ -268,8 +269,9 @@ def main(
     model_checkpoint = ModelCheckpoint(
         dirpath=checkpoint_out_dir,
         every_n_train_steps=save_interval,
-        save_last=True,
+        save_top_k=-1,
         verbose=True,
+        save_weights_only=True,
     )
     trainer = L.Trainer(
         devices=devices,
@@ -284,6 +286,7 @@ def main(
         log_every_n_steps=log_interval,
         val_check_interval=eval_interval,
         num_nodes=num_nodes,
+        deterministic=deterministic,
     )
 
     if debug:
