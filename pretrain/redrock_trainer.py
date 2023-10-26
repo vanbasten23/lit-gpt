@@ -68,6 +68,7 @@ class LightningGPTModule(L.LightningModule):
       gradient_accumulation_steps: int,
       max_iters: int,
       warmup_iters: int,
+      fast_init: bool,
       trainer,
   ) -> None:
     super().__init__()
@@ -81,6 +82,7 @@ class LightningGPTModule(L.LightningModule):
     self.backward_nvtx_range = None
     self.max_iters = max_iters
     self.warmup_iters = warmup_iters
+    self.fast_init = fast_init
     self.trainer = trainer
 
   def configure_model(self) -> None:
@@ -88,11 +90,59 @@ class LightningGPTModule(L.LightningModule):
     import time
     print(self.trainer.global_rank, ' in configure_model', flush=True)
     print('RAM Used (GB):', psutil.virtual_memory()[3]/1000000000, flush=True)
-    t = time.time()
-    self.module = GPT(self.config)
-    print(f'{self.trainer.global_rank} time to init model: {(time.time()-t):.02f}s', flush=True)
-    t = time.time()
-    self.module.apply(self.module._init_weights)
+    if self.fast_init:
+      t = time.time()
+      # init meta model
+      with self.trainer.init_module(empty_init=True):
+        self.module = GPT(self.config)
+
+      # Iterate through each module in the model, replacing meta layers
+      # with real layers after initializing them and their weights.
+      # All layers not initialized below will be initialized later by FSDP
+      for name, module in self.module.named_modules():
+        state_dict = {}
+        if isinstance(module, torch.nn.Linear):
+          # define new layer on cuda so weight initialization is much faster
+          with torch.device('cuda'):
+            new_linear = torch.nn.Linear(
+                module.in_features,
+                module.out_features,
+                bias=True if module.bias is not None else False
+            )
+
+          # initialize weights
+          new_linear.apply(self.module._init_weights)
+
+          # move new layer to cpu & prepare to load into model
+          new_linear.to('cpu')
+          state_dict[f"{name}.weight"] = new_linear.weight
+
+          if module.bias is not None:
+            state_dict[f"{name}.bias"] = new_linear.bias
+
+        elif isinstance(module, torch.nn.Embedding):
+          # define new layer on cuda so weight initialization is much faster
+          with torch.device('cuda'):
+            new_embedding = torch.nn.Embedding(
+                module.weight.size()[0],
+                module.weight.size()[1]
+            )
+
+          # initialize weights
+          new_embedding.apply(self.module._init_weights)
+
+          # move new layer to cpu & prepare to load into model
+          new_embedding.to('cpu')
+          state_dict[f"{name}.weight"] = new_embedding.weight
+
+        # load new layer's weights & biases into model
+        self.module.load_state_dict(state_dict, strict=False, assign=True)
+    else:
+      t = time.time()
+      self.module = GPT(self.config)
+      print(f'{self.trainer.global_rank} time to init model: {(time.time()-t):.02f}s', flush=True)
+      t = time.time()
+      self.module.apply(self.module._init_weights)
     print(f'{self.trainer.global_rank} time to init weights: {(time.time()-t):.02f}s', flush=True)
     print(self.trainer.global_rank, ' out configure_model', flush=True)
     print('RAM Used (GB):', psutil.virtual_memory()[3]/1000000000, flush=True)
@@ -219,6 +269,7 @@ def main(
     pt_profiler_repeat: int = 5,
     debug: bool = False,
     deterministic: bool = False,
+    fast_init: bool = False,
 ) -> None:
   if use_pt_profiler:
     cm = nullcontext()
@@ -328,6 +379,7 @@ def main(
         gradient_accumulation_steps,
         max_iters,
         warmup_iters,
+        fast_init,
         trainer,
     )
     trainer.print(
