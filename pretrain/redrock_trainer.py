@@ -120,23 +120,23 @@ class LightningGPTModule(L.LightningModule):
           if module.bias is not None:
             state_dict[f"{name}.bias"] = new_linear.bias
 
-          elif isinstance(module, torch.nn.Embedding):
-            # define new layer on cuda so weight initialization is much faster
-            with torch.device('cuda'):
-              new_embedding = torch.nn.Embedding(
-                  module.weight.size()[0],
-                  module.weight.size()[1]
-              )
+        elif isinstance(module, torch.nn.Embedding):
+          # define new layer on cuda so weight initialization is much faster
+          with torch.device('cuda'):
+            new_embedding = torch.nn.Embedding(
+                module.weight.size()[0],
+                module.weight.size()[1]
+            )
 
-            # initialize weights
-            new_embedding.apply(self.module._init_weights)
+          # initialize weights
+          new_embedding.apply(self.module._init_weights)
             
-            # move new layer to cpu & prepare to load into model
-            new_embedding.to('cpu')
-            state_dict[f"{name}.weight"] = new_embedding.weight
+          # move new layer to cpu & prepare to load into model
+          new_embedding.to('cpu')
+          state_dict[f"{name}.weight"] = new_embedding.weight
 
-          # load new layer's weights & biases into model
-          self.module.load_state_dict(state_dict, strict=False, assign=True)
+        # load new layer's weights & biases into model
+        self.module.load_state_dict(state_dict, strict=False, assign=True)
     else:
       t = time.time()
       self.module = GPT(self.config)
