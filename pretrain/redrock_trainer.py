@@ -95,7 +95,7 @@ class LightningGPTModule(L.LightningModule):
       # init meta model
       with self.trainer.init_module(empty_init=True):
         self.module = GPT(self.config)
-      
+
       # Iterate through each module in the model, replacing meta layers
       # with real layers after initializing them and their weights.
       # All layers not initialized below will be initialized later by FSDP
@@ -112,7 +112,7 @@ class LightningGPTModule(L.LightningModule):
 
           # initialize weights
           new_linear.apply(self.module._init_weights)
-          
+
           # move new layer to cpu & prepare to load into model
           new_linear.to('cpu')
           state_dict[f"{name}.weight"] = new_linear.weight
@@ -130,7 +130,7 @@ class LightningGPTModule(L.LightningModule):
 
           # initialize weights
           new_embedding.apply(self.module._init_weights)
-            
+
           # move new layer to cpu & prepare to load into model
           new_embedding.to('cpu')
           state_dict[f"{name}.weight"] = new_embedding.weight
