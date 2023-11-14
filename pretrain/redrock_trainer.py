@@ -14,7 +14,7 @@ from lightning.pytorch.strategies import FSDPStrategy, XLAStrategy
 import numpy as np
 import torch
 import torch.autograd.profiler
-from torch.distributed.fsdp import ShardingStrategy
+from torch.distributed.fsdp import ShardingStrategy, BackwardPrefetch
 import torch.multiprocessing as mp
 import torch.profiler as tprofiler
 from torch.utils.data import DataLoader, IterableDataset
@@ -301,6 +301,7 @@ def main(
             limit_all_gathers=True,
             cpu_offload=False,
             sharding_strategy=ShardingStrategy.FULL_SHARD,
+            backward_prefetch=BackwardPrefetch.BACKWARD_POST,
         )
     else:
       strategy = "auto"
