@@ -382,6 +382,7 @@ def main(
         fast_init,
         trainer,
     )
+    model = torch.compile(model)
     trainer.print(
         f"Time to instantiate model: {time.perf_counter() - t0:.02f} seconds."
     )
