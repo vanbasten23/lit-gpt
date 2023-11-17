@@ -29,7 +29,7 @@ class GPT(nn.Module):
         self.transformer = nn.ModuleDict(
             dict(
                 wte=nn.Embedding(config.padded_vocab_size, config.n_embd),
-                h=nn.ModuleList(Block(config) for _ in range(config.n_layer)),
+                h=nn.ModuleList(Block(config) for _ in range(1)), # config.n_layer
                 ln_f=config.norm_class(config.n_embd, eps=config.norm_eps),
             )
         )
@@ -92,12 +92,14 @@ class GPT(nn.Module):
         x = self.transformer.wte(idx)  # token embeddings of shape (b, t, n_embd)
 
         if not use_kv_cache:
-            for block in self.transformer.h:
-                x, *_ = block(x, (cos, sin), max_seq_length)
+            for _ in range(self.config.n_layer):
+                for block in self.transformer.h:
+                    x, *_ = block(x, (cos, sin), max_seq_length)
         else:
             self.kv_caches = self.kv_caches or self.build_kv_caches(x, max_seq_length, cos.size(-1))
-            for i, block in enumerate(self.transformer.h):
-                x, self.kv_caches[i] = block(x, (cos, sin), max_seq_length, mask, input_pos, self.kv_caches[i])
+            for _ in range(self.config.n_layer):
+                for i, block in enumerate(self.transformer.h):
+                    x, self.kv_caches[i] = block(x, (cos, sin), max_seq_length, mask, input_pos, self.kv_caches[i])
 
         x = self.transformer.ln_f(x)
 
